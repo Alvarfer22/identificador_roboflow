@@ -1,20 +1,18 @@
 /*jshint esversion:6*/
 
 $(function () {
-    const { InferenceEngine, CVImage } = inferencejs;
-    const inferEngine = new InferenceEngine();
+    const { InferenceEngine: Engine, CVImage: Frame } = inferencejs;
+    const engine = new Engine();
 
     const video = $("video")[0];
 
-    var workerId;
-    var cameraMode = "environment"; // or "user"
+    let sessionId;
+    let cameraMode = "environment";
 
-    const startVideoStreamPromise = navigator.mediaDevices
+    const startVideoStream = navigator.mediaDevices
         .getUserMedia({
             audio: false,
-            video: {
-                facingMode: cameraMode
-            }
+            video: { facingMode: cameraMode }
         })
         .then(function (stream) {
             return new Promise(function (resolve) {
@@ -26,71 +24,48 @@ $(function () {
             });
         });
 
-    const loadModelPromise = new Promise(function (resolve, reject) {
-        inferEngine
+    const loadModel = new Promise(function (resolve, reject) {
+        engine
             .startWorker("universidad-laboral", "6", "rf_eeXth5tiR9O7pYByKLBZQYsEgf72")
             .then(function (id) {
-                workerId = id;
+                sessionId = id;
                 resolve();
             })
             .catch(reject);
     });
 
-    Promise.all([startVideoStreamPromise, loadModelPromise]).then(function () {
+    Promise.all([startVideoStream, loadModel]).then(function () {
         $("body").removeClass("loading");
         resizeCanvas();
         detectFrame();
     });
 
-    var canvas, ctx;
+    let canvas, ctx;
     const font = "16px sans-serif";
 
     function videoDimensions(video) {
-        // Ratio of the video's intrisic dimensions
-        var videoRatio = video.videoWidth / video.videoHeight;
-
-        // The width and height of the video element
-        var width = video.offsetWidth,
+        const videoRatio = video.videoWidth / video.videoHeight;
+        let width = video.offsetWidth,
             height = video.offsetHeight;
+        const elementRatio = width / height;
 
-        // The ratio of the element's width to its height
-        var elementRatio = width / height;
-
-        // If the video element is short and wide
         if (elementRatio > videoRatio) {
             width = height * videoRatio;
         } else {
-            // It must be tall and thin, or exactly equal to the original ratio
             height = width / videoRatio;
         }
 
-        return {
-            width: width,
-            height: height
-        };
+        return { width, height };
     }
 
-    $(window).resize(function () {
-        resizeCanvas();
-    });
+    $(window).resize(resizeCanvas);
 
-    const resizeCanvas = function () {
+    function resizeCanvas() {
         $("canvas").remove();
-
         canvas = $("<canvas/>");
-
         ctx = canvas[0].getContext("2d");
 
-        var dimensions = videoDimensions(video);
-
-        console.log(
-            video.videoWidth,
-            video.videoHeight,
-            video.offsetWidth,
-            video.offsetHeight,
-            dimensions
-        );
-
+        const dimensions = videoDimensions(video);
         canvas[0].width = video.videoWidth;
         canvas[0].height = video.videoHeight;
 
@@ -102,69 +77,39 @@ $(function () {
         });
 
         $("body").append(canvas);
-    };
+    }
 
-    const renderPredictions = function (predictions) {
-        var scale = 1;
-
+    function renderPredictions(predictions) {
+        const scale = 1;
         ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-        predictions.forEach(function (prediction) {
-            const x = prediction.bbox.x;
-            const y = prediction.bbox.y;
-
-            const width = prediction.bbox.width;
-            const height = prediction.bbox.height;
-
-            // Draw the bounding box.
-            ctx.strokeStyle = prediction.color;
+        predictions.forEach(pred => {
+            const { x, y, width, height } = pred.bbox;
+            ctx.strokeStyle = pred.color;
             ctx.lineWidth = 4;
-            ctx.strokeRect(
-                (x - width / 2) / scale,
-                (y - height / 2) / scale,
-                width / scale,
-                height / scale
-            );
-
-            // Draw the label background.
-            ctx.fillStyle = prediction.color;
-            const textWidth = ctx.measureText(prediction.class).width;
-            const textHeight = parseInt(font, 10); // base 10
-            ctx.fillRect(
-                (x - width / 2) / scale,
-                (y - height / 2) / scale,
-                textWidth + 8,
-                textHeight + 4
-            );
+            ctx.strokeRect((x - width / 2) / scale, (y - height / 2) / scale, width / scale, height / scale);
+            ctx.fillStyle = pred.color;
+            const textWidth = ctx.measureText(pred.class).width;
+            const textHeight = parseInt(font, 10);
+            ctx.fillRect((x - width / 2) / scale, (y - height / 2) / scale, textWidth + 8, textHeight + 4);
         });
 
-        predictions.forEach(function (prediction) {
-            const x = prediction.bbox.x;
-            const y = prediction.bbox.y;
-
-            const width = prediction.bbox.width;
-            const height = prediction.bbox.height;
-
-            // Draw the text last to ensure it's on top.
+        predictions.forEach(pred => {
+            const { x, y, width, height } = pred.bbox;
             ctx.font = font;
             ctx.textBaseline = "top";
             ctx.fillStyle = "#000000";
-            ctx.fillText(
-                prediction.class,
-                (x - width / 2) / scale + 4,
-                (y - height / 2) / scale + 1
-            );
+            ctx.fillText(pred.class, (x - width / 2) / scale + 4, (y - height / 2) / scale + 1);
         });
-    };
+    }
 
-    var prevTime;
-    var pastFrameTimes = [];
-    const detectFrame = function () {
-        if (!workerId) return requestAnimationFrame(detectFrame);
+    let prevTime;
+    const pastFrameTimes = [];
 
-        const image = new CVImage(video);
-        inferEngine
-            .infer(workerId, image)
+    function detectFrame() {
+        if (!sessionId) return requestAnimationFrame(detectFrame);
+        const frame = new Frame(video);
+        engine.infer(sessionId, frame)
             .then(function (predictions) {
                 requestAnimationFrame(detectFrame);
                 renderPredictions(predictions);
@@ -172,20 +117,14 @@ $(function () {
                 if (prevTime) {
                     pastFrameTimes.push(Date.now() - prevTime);
                     if (pastFrameTimes.length > 30) pastFrameTimes.shift();
-
-                    var total = 0;
-                    _.each(pastFrameTimes, function (t) {
-                        total += t / 1000;
-                    });
-
-                    var fps = pastFrameTimes.length / total;
+                    const total = pastFrameTimes.reduce((a, b) => a + b / 1000, 0);
+                    const fps = pastFrameTimes.length / total;
                     $("#fps").text(Math.round(fps));
                 }
                 prevTime = Date.now();
             })
-            .catch(function (e) {
-                console.log("CAUGHT", e);
+            .catch(function () {
                 requestAnimationFrame(detectFrame);
             });
-    };
+    }
 });
